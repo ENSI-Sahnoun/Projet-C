@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <locale.h>
+#include <unistd.h>
 
 /* -----
    Types
@@ -114,7 +116,7 @@ int questions()
     getchar();
     return choice;
 }
-
+// User functions
 
 User *create_user(int id, const char *name) {
     User *u = (User*)malloc(sizeof(User));
@@ -143,8 +145,10 @@ User* insert_user(User *root, int id, char *name) {
     else if (id > root->id)
         root->right = insert_user(root->right, id, name);
 
-    else
+    else{
         printf("Utilisateur avec l'ID %d existe déjà.\n", id);
+        return root;
+    }
 
     return root;
 }
@@ -159,7 +163,12 @@ User* add_user(User *root) {
     printf("Nom: ");
     if (!fgets(name, sizeof(name), stdin)) name[0] = '\0';
     name[strcspn(name, "\n")] = '\0';
+    if (search_user(root, id)) {
+        printf("Utilisateur avec l'ID %d existe déjà.\n", id);
+        return root;
+    }
     root = insert_user(root, id, name);
+    printf("\n-> Utilisateur ajouté.\n");
     return root;
 }
 
@@ -246,14 +255,12 @@ void save_users_rec(User *root, FILE *file) {
     if (!root) return;
 
     save_users_rec(root->left, file);
-
+    save_users_rec(root->right, file);
     UserSave tmp;
     tmp.id = root->id;
     strncpy(tmp.name, root->name, sizeof(tmp.name)-1);
     tmp.name[sizeof(tmp.name)-1] = '\0';
     fwrite(&tmp, sizeof(UserSave), 1, file);
-
-    save_users_rec(root->right, file);
 }
 
 void save_users(User *root) {
@@ -267,6 +274,7 @@ void save_users(User *root) {
 
 User* load_users() {
     FILE *file = fopen("utilisateurs.bin", "rb");
+    if (!file) return NULL;
     
     User *root = NULL;
     UserSave tmp;
@@ -279,18 +287,16 @@ User* load_users() {
     return root;
 }
 
-/* -------------------------
-   Relations save/load (text)
-   ------------------------- */
+// Relations functions
 
 void save_relations(User *root, FILE *file) {
     if (!root) return;
 
     save_relations(root->left, file);
-
+    save_relations(root->right, file);
     fprintf(file, "ID: %d\n", root->id);
 
-    fprintf(file, "Friends:");
+    fprintf(file, "Amis:");
     Relation *f = root->amis;
     while (f) {
         fprintf(file, " %d", f->id);
@@ -306,21 +312,14 @@ void save_relations(User *root, FILE *file) {
     }
     fprintf(file, "\n\n");
 
-    save_relations(root->right, file);
 }
 
 void save_all_relations(User *root) {
     FILE *file = fopen("relations.txt", "w");
-    if (!file) {
-        printf("Erreur ouverture relations.txt\n");
-        return;
-    }
-
     save_relations(root, file);
     fclose(file);
 
 }
-
 
 int relation_exists(Relation *head, int id) {
     Relation *r = head;
@@ -330,6 +329,7 @@ int relation_exists(Relation *head, int id) {
     }
     return 0;
 }
+
 void add_relation_front(Relation **head, int id) {
     if (relation_exists(*head, id)) return;
     Relation *n = (Relation*)malloc(sizeof(Relation));
@@ -441,6 +441,8 @@ void manage_relations(User *root){
 
 void load_relations(User *root) {
     FILE *file = fopen("relations.txt", "r");
+    if (!file) return;
+    
     char line[512];
     int current_id = -1;
 
@@ -456,8 +458,13 @@ void load_relations(User *root) {
             char *token = strtok(p, " \t\n");
             while (token) {
                 int fid;
-                if (sscanf(token, "%d", &fid) == 1)
-                    add_friend(root, u, fid);
+                if (sscanf(token, "%d", &fid) == 1) {
+                    User *f = search_user(root, fid);
+                    if (f && !relation_exists(u->amis, fid)) {
+                        add_relation_front(&u->amis, fid);
+                        add_relation_front(&f->amis, u->id);
+                    }
+                }
                 token = strtok(NULL, " \t\n");
             }
         }
@@ -469,8 +476,10 @@ void load_relations(User *root) {
             char *token = strtok(p, " \t\n");
             while (token) {
                 int fid;
-                if (sscanf(token, "%d", &fid) == 1)
-                    follow(root, u, fid);
+                if (sscanf(token, "%d", &fid) == 1) {
+                    if (!relation_exists(u->abonnements, fid))
+                        add_relation_front(&u->abonnements, fid);
+                }
                 token = strtok(NULL, " \t\n");
             }
         }
@@ -479,19 +488,17 @@ void load_relations(User *root) {
     fclose(file);
 }
 
-
 void save_publications(User *root, FILE *file) {
     if (!root) return;
 
     save_publications(root->left, file);
+    save_publications(root->right, file);
 
     Publication *p = root->publications;
     while (p) {
-        fprintf(file,"[%d](%s): %s\n", root->id, p->date, p->message);
+        fprintf(file,"%d;%s;%s\n", root->id, p->date, p->message);
         p = p->next;
     }
-
-    save_publications(root->right, file);
 }
 
 void save_all_publications(User *root) {
@@ -514,22 +521,21 @@ void push_publication(User *u, const char *message, const char *date) {
 
 void load_publications(User *root) {
     FILE *file = fopen("publications.txt", "r");
-    if (!file) {
-        printf("Aucun fichier publications.txt trouvé.\n");
-        return;
-    }
-
+    if (!file) return;
+    
     int id;
     char date[20];
     char message[200];
 
-    while (fscanf(file, "%d;%19[^;];%199[^\n]\n", &id, date, message) == 3) {
+    while (fscanf(file, "%d;%19[^;];%199[^\n]", &id, date, message) == 3) {
         User *u = search_user(root, id);
         if (u) push_publication(u, message, date);
+        fscanf(file, "\n");
     }
 
     fclose(file);
 }
+
 void show_timeline(User *root) {
     int id;
     printf("\nID utilisateur: ");
@@ -537,7 +543,6 @@ void show_timeline(User *root) {
     getchar();
     User *u = search_user(root, id);
     if (!u) { printf("Utilisateur non trouvé.\n"); return; }
-    // Count number of friend posts
     int count = 0;
     Relation *rf = u->amis;
 
@@ -555,7 +560,7 @@ void show_timeline(User *root) {
     }
 
 
-    TimelinePost *posts = malloc(count * sizeof(TimelinePost)); // posts = [TimelinePost, TimelinePost, ...]
+    TimelinePost *posts = malloc(count * sizeof(TimelinePost));
     int index = 0;
 
 
@@ -596,25 +601,134 @@ void show_timeline(User *root) {
     free(posts);
 }
 
+int count_relations(Relation *r) {
+    int c = 0;
+    while (r) { c++; r = r->next; }
+    return c;
+}
+
+int count_posts(Publication *p) {
+    int c = 0;
+    while (p) { c++; p = p->next; }
+    return c;
+}
+
+int count_followers(User *root, int target_id) {
+    if (!root) return 0;
+
+    int c = 0;
+    Relation *r = root->abonnements;
+    while (r) {
+        if (r->id == target_id) c++;
+        r = r->next;
+    }
+
+    return c + count_followers(root->left, target_id) + count_followers(root->right, target_id);
+}
+
+void compute_statistics(User *root, int *total_users,
+                        User **most_active, int *max_posts,
+                        User **most_followed, int *max_followers,
+                        User **most_friends, int *max_friends)
+{
+    if (!root) return;
+
+    compute_statistics(root->left, total_users,
+                       most_active, max_posts,
+                       most_followed, max_followers,
+                       most_friends, max_friends);
+
+    (*total_users)++;
+
+    int posts = count_posts(root->publications);
+    if (posts > *max_posts) {
+        *max_posts = posts;
+        *most_active = root;
+    }
+
+    int friends = count_relations(root->amis);
+    if (friends > *max_friends) {
+        *max_friends = friends;
+        *most_friends = root;
+    }
+
+    int followers = count_followers(root, root->id);
+
+    if (followers > *max_followers) {
+        *max_followers = followers;
+        *most_followed = root;
+    }
+
+    compute_statistics(root->right, total_users,
+                       most_active, max_posts,
+                       most_followed, max_followers,
+                       most_friends, max_friends);
+}
+
+void show_statistics(User *root) {
+
+    if (!root) {
+        printf("\nAucun utilisateur.\n");
+        return;
+    }
+
+    int total_users = 0;
+
+    User *most_active = NULL;
+    User *most_followed = NULL;
+    User *most_friends_user = NULL;
+
+    int max_posts = -1;
+    int max_followers = -1;
+    int max_friends = -1;
+
+    compute_statistics(root, &total_users,
+                       &most_active, &max_posts,
+                       &most_followed, &max_followers,
+                       &most_friends_user, &max_friends);
+
+    printf("\n===== STATISTIQUES DU eChat =====\n");
+    printf("Nombre total d'utilisateurs : %d\n", total_users);
+
+    if (most_active)
+        printf("Utilisateur le plus actif     : %s (%d publications)\n",
+               most_active->name, max_posts);
+
+    if (most_followed)
+        printf("Utilisateur le plus suivi     : %s (%d abonnés)\n",
+               most_followed->name, max_followers);
+
+    if (most_friends_user)
+        printf("Utilisateur avec plus sociable : %s (%d amis)\n",
+               most_friends_user->name, max_friends);
+
+    printf("====================================\n");
+}
+
 int main() {
     User *root = NULL;
     int choice;
+    setlocale(LC_ALL, "en_US.UTF-8");
 
     titlescreen();
     credits();
 
     printf("Chargement des utilisateurs...\n");
     root = load_users();
+    sleep(1);
 
     printf("Chargement des relations...\n");
     load_relations(root);
+    sleep(1);
 
     printf("Chargement des publications...\n");
     load_publications(root);
+    sleep(1);
 
     printf("Chargement terminé.\n\n");
 
     while (1) {
+        sleep(1);
 
         choice = questions();
 
@@ -622,7 +736,6 @@ int main() {
 
         case 1: {
             root = add_user(root);    
-            printf("\n-> Utilisateur ajouté.\n");
             break;
         }
 
@@ -680,19 +793,19 @@ int main() {
             break;
 
         case 7:
-            printf("\nStatistiques pas encore implémentées.\n");
+            show_statistics(root);
             break;
-
+        case 8:
+            show_timeline(root);
+            break;
         case 9:
             printf("\nSauvegarde en cours...\n");
             save_users(root);
             save_all_relations(root);
             save_all_publications(root);
+            sleep(1);
             printf("Sauvegarde terminée. Au revoir !\n");
-            exit(0);
-        case 8:
-            show_timeline(root);
-            break;  
+            exit(0);  
 
         default:
             printf("\nChoix invalide.\n");
