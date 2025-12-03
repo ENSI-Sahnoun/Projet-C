@@ -259,13 +259,12 @@ Stocke toutes les publications :
 
 ## 🔮 Améliorations Futures
 
-- [ ] Implémentation des statistiques (utilisateurs actifs, nombre d'amis)
+- ☑️ Implémentation des statistiques (utilisateurs actifs, nombre d'amis)
 - [ ] Édition et suppression des publications
 - [ ] Affichage des listes d'amis et d'abonnés
 - [ ] Recherche avancée (par nom)
 - [ ] Protection par mot de passe
 - [ ] Réactions/likes sur les messages
-- [ ] Support des hashtags
 
 ---
 
